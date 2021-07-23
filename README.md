@@ -2,6 +2,24 @@ tabbed - generic tabbed interface
 =================================
 tabbed is a simple tabbed X window container.
 
+### About:
+Forked from [suckless/tabbed](https://git.suckless.org/tabbed) w/ patches and modifications.
+
+### Patches:
+- alpha
+- clientnumber
+### Modifications:
+- added a separator bar between tabs
+- fixed width tabs.
+- allow text to be align left, center or right.
+### Screenshots:
+![tabbed & st](screenshots/tabbed_st.png)
+### Original Readme:
+```
+tabbed - generic tabbed interface
+=================================
+tabbed is a simple tabbed X window container.
+
 Requirements
 ------------
 In order to build tabbed you need the Xlib header files.
@@ -19,4 +37,4 @@ Afterwards enter the following command to build and install tabbed
 Running tabbed
 --------------
 See the man page for details.
-
+```

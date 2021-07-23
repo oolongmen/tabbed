@@ -8,12 +8,24 @@ static const char* selbgcolor   = "#555555";
 static const char* selfgcolor   = "#ffffff";
 static const char* urgbgcolor   = "#111111";
 static const char* urgfgcolor   = "#cc0000";
+static const char* sepfgcolor   = "#505050";
 static const char before[]      = "<";
 static const char after[]       = ">";
 static const char titletrim[]   = "...";
 static const int  tabwidth      = 200;
+static const int  sepwidth      = 0;
 static const Bool foreground    = True;
 static       Bool urgentswitch  = False;
+static       Bool fixedtabwidth = False;
+static       int  taboffset     = 2;
+static       Bool showclientnum = False;
+static       Bool hidetitle     = False;
+
+enum {
+	AlignLeft,
+	AlignCenter,
+	AlignRight
+} static tabtextalign = AlignLeft;
 
 /*
  * Where to place a new tab when it is opened. When npisrelative is True,

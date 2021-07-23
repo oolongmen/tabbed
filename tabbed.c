@@ -46,6 +46,7 @@
 #define LENGTH(x)               (sizeof((x)) / sizeof(*(x)))
 #define CLEANMASK(mask)         (mask & ~(numlockmask | LockMask))
 #define TEXTW(x)                (textnw(x, strlen(x)) + dc.font.height)
+#define DBUG(fmt, ...)          fprintf(stderr, fmt "\n", ##__VA_ARGS__);
 
 enum { ColFG, ColBG, ColLast };       /* color */
 enum { WMProtocols, WMDelete, WMName, WMState, WMFullscreen,
@@ -68,6 +69,7 @@ typedef struct {
 	XftColor norm[ColLast];
 	XftColor sel[ColLast];
 	XftColor urg[ColLast];
+	XftColor sep;
 	Drawable drawable;
 	GC gc;
 	struct {
@@ -96,7 +98,8 @@ static void createnotify(const XEvent *e);
 static void destroynotify(const XEvent *e);
 static void die(const char *errstr, ...);
 static void drawbar(void);
-static void drawtext(const char *text, XftColor col[ColLast]);
+static void drawbarsep(void);
+static void drawtext(const char *text, XftColor col[ColLast], int align);
 static void *ecalloc(size_t n, size_t size);
 static void *erealloc(void *o, size_t size);
 static void expose(const XEvent *e);
@@ -169,6 +172,9 @@ static char winid[64];
 static char **cmd;
 static char *wmname = "tabbed";
 static const char *geometry;
+
+static Colormap cmap;
+static Visual *visual = NULL;
 
 char *argv0;
 
@@ -254,8 +260,7 @@ configurenotify(const XEvent *e)
 		ww = ev->width;
 		wh = ev->height;
 		XFreePixmap(dpy, dc.drawable);
-		dc.drawable = XCreatePixmap(dpy, root, ww, wh,
-		              DefaultDepth(dpy, screen));
+		dc.drawable = XCreatePixmap(dpy, root, ww, wh, 32);
 
 		if (!obh && (wh <= bh)) {
 			obh = bh;
@@ -326,57 +331,105 @@ drawbar(void)
 	XftColor *col;
 	int c, cc, fc, width;
 	char *name = NULL;
+	char buf[256];
+	int end;
 
 	if (nclients == 0) {
 		dc.x = 0;
 		dc.w = ww;
 		XFetchName(dpy, win, &name);
-		drawtext(name ? name : "", dc.norm);
+		drawtext(name ? name : "", dc.norm, tabtextalign);
 		XCopyArea(dpy, dc.drawable, win, dc.gc, 0, 0, ww, bh, 0, 0);
 		XSync(dpy, False);
 
 		return;
 	}
 
-	width = ww;
-	cc = ww / tabwidth;
+	width = end = ww;
+	cc = width / (tabwidth + sepwidth);
 	if (nclients > cc)
-		cc = (ww - TEXTW(before) - TEXTW(after)) / tabwidth;
+		cc = (width - TEXTW(before) - TEXTW(after) - sepwidth) / (tabwidth + sepwidth);
 
 	if ((fc = getfirsttab()) + cc < nclients) {
 		dc.w = TEXTW(after);
-		dc.x = width - dc.w;
-		drawtext(after, dc.sel);
-		width -= dc.w;
+		dc.x = ww - dc.w;
+		drawtext(after, dc.sel, tabtextalign);
+		width = end = dc.x;
 	}
+
 	dc.x = 0;
 
 	if (fc > 0) {
 		dc.w = TEXTW(before);
-		drawtext(before, dc.sel);
+		drawtext(before, dc.sel, tabtextalign);
 		dc.x += dc.w;
 		width -= dc.w;
+
+		if (sepwidth > 0) {
+			drawbarsep();
+			dc.x += sepwidth;
+			width -= sepwidth;
+		}
 	}
 
 	cc = MIN(cc, nclients);
 	for (c = fc; c < fc + cc; c++) {
-		dc.w = width / cc;
+		dc.w = (fixedtabwidth) ? tabwidth : width / cc;
 		if (c == sel) {
 			col = dc.sel;
-			dc.w += width % cc;
+			if (!fixedtabwidth)
+				dc.w += width % cc;
 		} else {
 			col = clients[c]->urgent ? dc.urg : dc.norm;
 		}
-		drawtext(clients[c]->name, col);
+
+		if (showclientnum) {
+			if (hidetitle)
+				snprintf(buf, sizeof(buf), "%d", c + 1);
+			else
+				snprintf(buf, sizeof(buf), "%d:%s", c + 1, clients[c]->name);
+			drawtext(buf, col, tabtextalign);
+		} else {
+			drawtext(clients[c]->name, col, tabtextalign);
+		}
 		dc.x += dc.w;
 		clients[c]->tabx = dc.x;
+
+		if (sepwidth > 0) {
+			drawbarsep();
+			dc.x += sepwidth;
+		}
 	}
+
+	if (fixedtabwidth && (dc.x < end)) {
+		dc.w = end - dc.x;
+		if (dc.w > 0)
+			drawtext(NULL, dc.norm, tabtextalign);
+	}
+
 	XCopyArea(dpy, dc.drawable, win, dc.gc, 0, 0, ww, bh, 0, 0);
 	XSync(dpy, False);
 }
 
 void
-drawtext(const char *text, XftColor col[ColLast])
+drawbarsep()
+{
+	XRectangle r = { dc.x, dc.y, sepwidth, dc.h };
+
+	XSetForeground(dpy, dc.gc, dc.norm[ColBG].pixel);
+	XFillRectangles(dpy, dc.drawable, dc.gc, &r, 1);
+
+    r.y += 2;
+    r.height -= 4;
+
+	XSetForeground(dpy, dc.gc, dc.sep.pixel);
+	XFillRectangles(dpy, dc.drawable, dc.gc, &r, 1);
+
+	return;
+}
+
+void
+drawtext(const char *text, XftColor col[ColLast], int align)
 {
 	int i, j, x, y, h, len, olen;
 	char buf[256];
@@ -407,7 +460,21 @@ drawtext(const char *text, XftColor col[ColLast])
 			;
 	}
 
-	d = XftDrawCreate(dpy, dc.drawable, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen));
+	buf[len] = '\0';
+	switch (align) {
+		case AlignCenter:
+			i = TEXTW(buf);
+			x += (r.width - i) / 2;
+			break;
+		case AlignRight:
+			i = TEXTW(buf);
+			x += r.width - i;
+			break;
+		default:
+			break;
+	}
+
+	d = XftDrawCreate(dpy, dc.drawable, visual, cmap);
 	XftDrawStringUtf8(d, &col[ColFG], dc.font.xfont, x, y, (XftChar8 *) buf, len);
 	XftDrawDestroy(d);
 }
@@ -575,7 +642,7 @@ getcolor(const char *colstr)
 {
 	XftColor color;
 
-	if (!XftColorAllocName(dpy, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen), colstr, &color))
+  if (!XftColorAllocName(dpy, visual, cmap, colstr, &color))
 		die("%s: cannot allocate color '%s'\n", argv0, colstr);
 
 	return color;
@@ -589,9 +656,9 @@ getfirsttab(void)
 	if (sel < 0)
 		return 0;
 
-	cc = ww / tabwidth;
+	cc = ww / (tabwidth + sepwidth);
 	if (nclients > cc)
-		cc = (ww - TEXTW(before) - TEXTW(after)) / tabwidth;
+		cc = (ww - TEXTW(before) - TEXTW(after) - sepwidth) / (tabwidth + sepwidth);
 
 	ret = sel - cc / 2 + (cc + 1) % 2;
 	return ret < 0 ? 0 :
@@ -984,7 +1051,7 @@ setup(void)
 	screen = DefaultScreen(dpy);
 	root = RootWindow(dpy, screen);
 	initfont(font);
-	bh = dc.h = dc.font.height + 2;
+	bh = dc.h = dc.font.height + taboffset;
 
 	/* init atoms */
 	wmatom[WMDelete] = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
@@ -1030,18 +1097,61 @@ setup(void)
 			wy = dh + wy - wh - 1;
 	}
 
+	XVisualInfo *vis;
+	XRenderPictFormat *fmt;
+	int nvi;
+	int i;
+
+	XVisualInfo tpl = {
+		.screen = screen,
+		.depth = 32,
+		.class = TrueColor
+	};
+
+	vis = XGetVisualInfo(dpy, VisualScreenMask | VisualDepthMask | VisualClassMask, &tpl, &nvi);
+	for(i = 0; i < nvi; i ++) {
+		fmt = XRenderFindVisualFormat(dpy, vis[i].visual);
+		if (fmt->type == PictTypeDirect && fmt->direct.alphaMask) {
+			visual = vis[i].visual;
+			break;
+		}
+	}
+
+	XFree(vis);
+
+	if (! visual) {
+		fprintf(stderr, "Couldn't find ARGB visual.\n");
+		exit(1);
+	}
+
+	cmap = XCreateColormap( dpy, root, visual, None);
 	dc.norm[ColBG] = getcolor(normbgcolor);
 	dc.norm[ColFG] = getcolor(normfgcolor);
 	dc.sel[ColBG] = getcolor(selbgcolor);
 	dc.sel[ColFG] = getcolor(selfgcolor);
 	dc.urg[ColBG] = getcolor(urgbgcolor);
 	dc.urg[ColFG] = getcolor(urgfgcolor);
-	dc.drawable = XCreatePixmap(dpy, root, ww, wh,
-	                            DefaultDepth(dpy, screen));
-	dc.gc = XCreateGC(dpy, root, 0, 0);
+	dc.sep = getcolor(sepfgcolor);
 
-	win = XCreateSimpleWindow(dpy, root, wx, wy, ww, wh, 0,
-	                          dc.norm[ColFG].pixel, dc.norm[ColBG].pixel);
+	XSetWindowAttributes attrs;
+	attrs.background_pixel = dc.norm[ColBG].pixel;
+	attrs.border_pixel = dc.norm[ColFG].pixel;
+	attrs.bit_gravity = NorthWestGravity;
+	attrs.event_mask = FocusChangeMask | KeyPressMask
+		| ExposureMask | VisibilityChangeMask | StructureNotifyMask
+		| ButtonMotionMask | ButtonPressMask | ButtonReleaseMask;
+	attrs.background_pixmap = None ;
+	attrs.colormap = cmap;
+
+	win = XCreateWindow(dpy, root, wx, wy,
+	ww, wh, 0, 32, InputOutput,
+	visual, CWBackPixmap | CWBorderPixel | CWBitGravity
+	| CWEventMask | CWColormap, &attrs);
+
+	dc.drawable = XCreatePixmap(dpy, win, ww, wh,
+	                            32);
+	dc.gc = XCreateGC(dpy, dc.drawable, 0, 0);
+
 	XMapRaised(dpy, win);
 	XSelectInput(dpy, win, SubstructureNotifyMask | FocusChangeMask |
 	             ButtonPressMask | ExposureMask | KeyPressMask |
