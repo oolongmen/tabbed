@@ -8,6 +8,7 @@ Forked from [suckless/tabbed](https://git.suckless.org/tabbed) w/ patches and mo
 ### Patches:
 - alpha
 - clientnumber
+- autohide
 ### Modifications:
 - added a separator bar between tabs
 - fixed width tabs.
